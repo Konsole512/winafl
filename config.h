@@ -35,6 +35,9 @@
  *                                                    *
  ******************************************************/
 
+/* Default file permission umode when creating files (default: 0600) */
+#define DEFAULT_PERMISSION  0600
+
 /* Comment out to disable terminal colors: */
 
 // #define USE_COLOR
@@ -54,11 +57,11 @@
 
 /* Default memory limit for child process (MB): */
 
-#ifndef __x86_64__ 
+#ifndef _WIN64 
 #  define MEM_LIMIT         0
 #else
 #  define MEM_LIMIT         0
-#endif /* ^!__x86_64__ */
+#endif /* ^!_WIN64 */
 
 /* Default memory limit when running in QEMU mode (MB): */
 
@@ -351,5 +354,7 @@
    measuring coverage that could be attained by a "dumb" fuzzing algorithm: */
 
 // #define IGNORE_FINDS
+
+#define MAX_ATTACH_ATTEMPTS 10
 
 #endif /* ! _HAVE_CONFIG_H */

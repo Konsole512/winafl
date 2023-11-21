@@ -31,17 +31,21 @@ please refer to the original documentation at:
 http://lcamtuf.coredump.cx/afl/
 
 Unfortunately, the original AFL does not work on Windows due to very
-*nix-specific design (e.g. instrumentation, forkserver etc). This project is
+*nix-specific design (e.g. instrumentation, forkserver etc.). This project is
 a fork of AFL that uses different instrumentation approach which works on
 Windows even for black box binary fuzzing.
 
 ## The WinAFL approach
 
-Instead of instrumenting the code at compilation time, WinAFL relies on dynamic
-instrumentation using DynamoRIO (http://dynamorio.org/) to measure and extract
-target coverage. This approach has been found to introduce an overhead about 2x
-compared to the native execution speed, which is comparable to the original AFL
-in binary instrumentation mode.
+Instead of instrumenting the code at compilation time, WinAFL supports the
+following instrumentation modes:
+ - Dynamic instrumentation using DynamoRIO (http://dynamorio.org/)
+ - Dynamic instrumentation using TinyInst (https://github.com/googleprojectzero/TinyInst)
+ - Hardware tracing using Intel PT
+ - Static instrumentation via Syzygy
+
+These instrumentation modes are described in more detail in the separate
+documents.
 
 <p align="center">
 <img alt="afl-fuzz.exe" src="screenshots/afl-fuzz.gif"/>
@@ -52,25 +56,54 @@ fuzzing mode, that is, executing multiple input samples without restarting the
 target process. This is accomplished by selecting a target function (that the
 user wants to fuzz) and instrumenting it so that it runs in a loop.
 
-WinAFL has been successfully used to identify bugs in Windows software, such as
+#### Known CVEs
 
- * CVE-2016-7212 - found by Aral Yaman of Noser Engineering AG
- * CVE-2017-0073, CVE-2017-0190, CVE-2017-11816 - found by [Symeon Paraschoudis](https://twitter.com/symeonp) of SensePost
- 
-(Let me know if you know of any others and I'll include them in the list)
+WinAFL has been successfully used to identify bugs in Windows software, such as the following:
+
+| Software | Bugs | Found by |
+| - | - | - |
+| Adobe | [CVE-2018-4985](https://cpr-zero.checkpoint.com/vulns/cprid-2046/), [CVE-2018-5063](https://cpr-zero.checkpoint.com/vulns/cprid-2047/), [CVE-2018-5064](https://cpr-zero.checkpoint.com/vulns/cprid-2048/), [CVE-2018-5065](https://cpr-zero.checkpoint.com/vulns/cprid-2049/), [CVE-2018-5068](https://cpr-zero.checkpoint.com/vulns/cprid-2050/), [CVE-2018-5069](https://cpr-zero.checkpoint.com/vulns/cprid-2051/), [CVE-2018-5070](https://cpr-zero.checkpoint.com/vulns/cprid-2052/), [CVE-2018-12754](https://cpr-zero.checkpoint.com/vulns/cprid-2053/), [CVE-2018-12755](https://cpr-zero.checkpoint.com/vulns/cprid-2054/), [CVE-2018-12764](https://cpr-zero.checkpoint.com/vulns/cprid-2055/), [CVE-2018-12765](https://cpr-zero.checkpoint.com/vulns/cprid-2056/), [CVE-2018-12766](https://cpr-zero.checkpoint.com/vulns/cprid-2057/), [CVE-2018-12767](https://cpr-zero.checkpoint.com/vulns/cprid-2058/), [CVE-2018-12768](https://cpr-zero.checkpoint.com/vulns/cprid-2059/), [CVE-2018-12839](https://cpr-zero.checkpoint.com/vulns/cprid-2060/), [CVE-2018-12840](https://cpr-zero.checkpoint.com/vulns/cprid-2061/), [CVE-2018-12848](https://cpr-zero.checkpoint.com/vulns/cprid-2062/), [CVE-2018-12849](https://cpr-zero.checkpoint.com/vulns/cprid-2063/), [CVE-2018-12850](https://cpr-zero.checkpoint.com/vulns/cprid-2064/), [CVE-2018-12857](https://cpr-zero.checkpoint.com/vulns/cprid-2065/), [CVE-2018-12859](https://cpr-zero.checkpoint.com/vulns/cprid-2066/), [CVE-2018-12860](https://cpr-zero.checkpoint.com/vulns/cprid-2067/), [CVE-2018-12861](https://cpr-zero.checkpoint.com/vulns/cprid-2068/), [CVE-2018-12862](https://cpr-zero.checkpoint.com/vulns/cprid-2069/), [CVE-2018-12863](https://cpr-zero.checkpoint.com/vulns/cprid-2070/), [CVE-2018-12864](https://cpr-zero.checkpoint.com/vulns/cprid-2071/), [CVE-2018-12865](https://cpr-zero.checkpoint.com/vulns/cprid-2072/), [CVE-2018-12866](https://cpr-zero.checkpoint.com/vulns/cprid-2073/), [CVE-2018-12867](https://cpr-zero.checkpoint.com/vulns/cprid-2074/), [CVE-2018-12869](https://cpr-zero.checkpoint.com/vulns/cprid-2075/), [CVE-2018-12870](https://cpr-zero.checkpoint.com/vulns/cprid-2076/), [CVE-2018-12871](https://cpr-zero.checkpoint.com/vulns/cprid-2077/), [CVE-2018-12872](https://cpr-zero.checkpoint.com/vulns/cprid-2078/), [CVE-2018-12873](https://cpr-zero.checkpoint.com/vulns/cprid-2079/), [CVE-2018-12874](https://cpr-zero.checkpoint.com/vulns/cprid-2080/), [CVE-2018-12875](https://cpr-zero.checkpoint.com/vulns/cprid-2081/), [CVE-2018-15927](https://cpr-zero.checkpoint.com/vulns/cprid-2082/), CVE-2018-15928, [CVE-2018-15929](https://cpr-zero.checkpoint.com/vulns/cprid-2083/), [CVE-2018-15930](https://cpr-zero.checkpoint.com/vulns/cprid-2084/), [CVE-2018-15931](https://cpr-zero.checkpoint.com/vulns/cprid-2085/), [CVE-2018-15932](https://cpr-zero.checkpoint.com/vulns/cprid-2086/), [CVE-2018-15933](https://cpr-zero.checkpoint.com/vulns/cprid-2087/), [CVE-2018-15934](https://cpr-zero.checkpoint.com/vulns/cprid-2088/), [CVE-2018-15935](https://cpr-zero.checkpoint.com/vulns/cprid-2089/), [CVE-2018-15936](https://cpr-zero.checkpoint.com/vulns/cprid-2090/), [CVE-2018-15937](https://cpr-zero.checkpoint.com/vulns/cprid-2091/), [CVE-2018-15938](https://cpr-zero.checkpoint.com/vulns/cprid-2092/), [CVE-2018-15952](https://cpr-zero.checkpoint.com/vulns/cprid-2093/), [CVE-2018-15953](https://cpr-zero.checkpoint.com/vulns/cprid-2094/), [CVE-2018-15954](https://cpr-zero.checkpoint.com/vulns/cprid-2095/), [CVE-2018-15955](https://cpr-zero.checkpoint.com/vulns/cprid-2096/), [CVE-2018-15956](https://cpr-zero.checkpoint.com/vulns/cprid-2097/) | Yoav Alon ([@yoavalon](https://twitter.com/yoavalon)) and Netanel Ben-Simon ([@NetanelBenSimon](https://twitter.com/netanelbensimon)) of Check Point Software Technologies
+| Adobe | CVE-2018-12853, CVE-2018-16024, CVE-2018-16023, CVE-2018-15995 | Guy Inbar ([@guyio_](https://twitter.com/guyio_))
+| Adobe | CVE-2018-16004, CVE-2018-16005, CVE-2018-16007, CVE-2018-16009, CVE-2018-16010, CVE-2018-16043, CVE-2018-16045, CVE-2018-16046, CVE-2018-19719, CVE-2018-19720, CVE-2019-7045 | Sebastian Apelt ([@bitshifter123](https://twitter.com/bitshifter123))
+| Microsoft | [CVE-2016-7212](https://msrc.microsoft.com/update-guide/en-US/vulnerability/CVE-2016-7212) | Aral Yaman of Noser Engineering AG
+| Microsoft | [CVE-2017-0073](https://msrc.microsoft.com/update-guide/en-US/vulnerability/CVE-2017-0073), [CVE-2017-0190](https://msrc.microsoft.com/update-guide/en-US/vulnerability/CVE-2017-0190), [CVE-2017-11816](https://msrc.microsoft.com/update-guide/en-US/vulnerability/CVE-2017-11816), [CVE-2018-8472](https://msrc.microsoft.com/update-guide/en-US/vulnerability/CVE-2018-8472), [CVE-2019-1311](https://msrc.microsoft.com/update-guide/en-US/vulnerability/CVE-2019-1311) | Symeon Paraschoudis ([@symeonp](https://twitter.com/symeonp))
+| Microsoft | [CVE-2018-8494](https://msrc.microsoft.com/update-guide/en-US/vulnerability/CVE-2018-8494) | Guy Inbar ([@guyio_](https://twitter.com/guyio_))
+| Microsoft | [CVE-2018-8464](https://cpr-zero.checkpoint.com/vulns/cprid-2098/) | Yoav Alon ([@yoavalon](https://twitter.com/yoavalon)) and Netanel Ben-Simon ([@NetanelBenSimon](https://twitter.com/netanelbensimon)) of Check Point Research
+| Microsoft | [CVE-2019-0538](https://msrc.microsoft.com/update-guide/en-US/vulnerability/CVE-2019-0538), [CVE-2019-0576](https://msrc.microsoft.com/update-guide/en-US/vulnerability/CVE-2019-0576), [CVE-2019-0577](https://msrc.microsoft.com/update-guide/en-US/vulnerability/CVE-2019-0577), [CVE-2019-0579](https://msrc.microsoft.com/update-guide/en-US/vulnerability/CVE-2019-0579), [CVE-2019-0580](https://msrc.microsoft.com/update-guide/en-US/vulnerability/CVE-2019-0580), [CVE-2019-0879](https://msrc.microsoft.com/update-guide/en-US/vulnerability/CVE-2019-0879), [CVE-2019-0889](https://msrc.microsoft.com/update-guide/en-US/vulnerability/CVE-2019-0889), [CVE-2019-0891](https://msrc.microsoft.com/update-guide/en-US/vulnerability/CVE-2019-0891), [CVE-2019-0899](https://msrc.microsoft.com/update-guide/en-US/vulnerability/CVE-2019-0899), [CVE-2019-0902](https://msrc.microsoft.com/update-guide/en-US/vulnerability/CVE-2019-0902), [CVE-2019-1243](https://msrc.microsoft.com/update-guide/en-US/vulnerability/CVE-2019-1243), [CVE-2019-1250](https://msrc.microsoft.com/update-guide/en-US/vulnerability/CVE-2019-1250), [CVE-2020-0687](https://msrc.microsoft.com/update-guide/en-US/vulnerability/CVE-2020-0687), [CVE-2020-0744](https://msrc.microsoft.com/update-guide/en-US/vulnerability/CVE-2020-0744), [CVE-2020-0879](https://msrc.microsoft.com/update-guide/en-US/vulnerability/CVE-2020-0879), [CVE-2020-0964](https://msrc.microsoft.com/update-guide/en-US/vulnerability/CVE-2020-0964), [CVE-2020-0995](https://msrc.microsoft.com/update-guide/en-US/vulnerability/CVE-2020-0995), [CVE-2020-1141](https://msrc.microsoft.com/update-guide/en-US/vulnerability/CVE-2020-1141), [CVE-2020-1145](https://msrc.microsoft.com/update-guide/en-US/vulnerability/CVE-2020-1145), [CVE-2020-1160](https://msrc.microsoft.com/update-guide/en-US/vulnerability/CVE-2020-1160), [CVE-2020-1179](https://msrc.microsoft.com/update-guide/en-US/vulnerability/CVE-2020-1179), [CVE-2021-1665](https://www.mcafee.com/blogs/other-blogs/mcafee-labs/analyzing-cve-2021-1665-remote-code-execution-vulnerability-in-windows-gdi/) | Hardik Shah ([@hardik05](https://twitter.com/hardik05)) of McAfee
+| Microsoft | [CVE-2021-42276](https://msrc.microsoft.com/update-guide/vulnerability/CVE-2021-42276), [CVE-2021-28350](https://msrc.microsoft.com/update-guide/vulnerability/CVE-2021-28350), [CVE-2021-28349](https://msrc.microsoft.com/update-guide/vulnerability/CVE-2021-28349), [CVE-2021-28348](https://msrc.microsoft.com/update-guide/vulnerability/CVE-2021-28348) | Simon Barsky ([expend20](https://twitter.com/expend20))
+| Microsoft | [CVE-2022-21903](https://msrc.microsoft.com/update-guide/vulnerability/CVE-2022-21903), [CVE-2022-21904](https://www.seljan.hu/posts/out-of-bounds-read-information-disclosure-vulnerability-in-microsoft-windows-gdi-emr_setdibitstodevice-record/), [CVE-2022-21915](https://www.seljan.hu/posts/out-of-bounds-read-information-disclosure-vulnerability-in-microsoft-windows-gdi-emr_stretchdibits-record/), [CVE-2022-26934](https://www.seljan.hu/posts/out-of-bounds-read-information-disclosure-vulnerability-in-microsoft-windows-gdi-emr_createdibpatternbrushpt-record/), [CVE-2022-29112](https://www.seljan.hu/posts/out-of-bounds-read-information-disclosure-vulnerability-in-microsoft-windows-gdi-emr_bitblt-record/), [CVE-2022-35837](https://www.seljan.hu/posts/arbitrary-read-information-disclosure-vulnerability-in-microsoft-windows-gdi-emr_startdoc-record/), [CVE-2022-34728](https://www.seljan.hu/posts/out-of-bounds-read-information-disclosure-vulnerability-in-microsoft-windows-gdi-emr_setpixelv-record/), [CVE-2022-38006](https://www.seljan.hu/posts/out-of-bounds-read-information-disclosure-vulnerability-in-microsoft-windows-gdi-emr_stretchdibits-record-again/) | [Gábor Selján](https://twitter.com/GaborSeljan)
+| Microsoft | [CVE-2021-38665](https://thalium.github.io/blog/posts/leaking-aslr-through-rdp-printer-cache-registry/), [CVE-2021-38666](https://thalium.github.io/blog/posts/deserialization-bug-through-rdp-smart-card-extension/) | Valentino Ricotta with Thalium
+| Microsoft | [CVE-2022-26929](https://msrc.microsoft.com/update-guide/vulnerability/CVE-2022-26929), [CVE-2022-30130](https://msrc.microsoft.com/update-guide/vulnerability/CVE-2022-30130) | Eran Zimmerman Gonen ([@3r4nz](https://twitter.com/3r4nz))
+| FreeRDP | [CVE-2021-37594](https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2021-37594), [CVE-2021-37595](https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2021-37595) | Valentino Ricotta with Thalium
+| Kollective | CVE-2018-11672 | Maksim Shudrak ([@MShudrak](https://twitter.com/MShudrak)) of Salesforce
+| Mozilla | [CVE-2018-5177](https://bugzilla.mozilla.org/show_bug.cgi?id=1451908) | Guy Inbar ([@guyio_](https://twitter.com/guyio_))
+| libxml2 | CVE-2018-14404 | Guy Inbar ([@guyio_](https://twitter.com/guyio_))
+| WinRAR | [CVE-2018-20250, CVE-2018-20251, CVE-2018-20252, CVE-2018-20253](https://research.checkpoint.com/2019/extracting-code-execution-from-winrar/) | Nadav Grossman ([@NadavGrossman](https://twitter.com/NadavGrossman)) of Check Point Software Technologies
+| XnView | [CVE-2019-13083](https://github.com/apriorit/pentesting/blob/master/bugs/xnview/0x384e2a.md), [CVE-2019-13084](https://github.com/apriorit/pentesting/blob/master/bugs/xnview/0x26b739.md), [CVE-2019-13085](https://github.com/apriorit/pentesting/blob/master/bugs/xnview/0x30ecfa.md), [CVE-2019-13253](https://github.com/apriorit/pentesting/blob/master/bugs/xnview/0x0000000000385474.md), [CVE-2019-13254](https://github.com/apriorit/pentesting/blob/master/bugs/xnview/0x000000000032e808.md), [CVE-2019-13255](https://github.com/apriorit/pentesting/blob/master/bugs/xnview/0x0000000000327464.md), [CVE-2019-13256](https://github.com/apriorit/pentesting/blob/master/bugs/xnview/0x000000000032e849.md), [CVE-2019-13257](https://github.com/apriorit/pentesting/blob/master/bugs/xnview/0x00000000003273aa.md), [CVE-2019-13258](https://github.com/apriorit/pentesting/blob/master/bugs/xnview/0x0000000000328165.md), [CVE-2019-13259](https://github.com/apriorit/pentesting/blob/master/bugs/xnview/0x000000000032e566.md), [CVE-2019-13260](https://github.com/apriorit/pentesting/blob/master/bugs/xnview/0x0000000000327a07.md), [CVE-2019-13261](https://github.com/apriorit/pentesting/blob/master/bugs/xnview/0x0000000000328384.md), [CVE-2019-13262](https://github.com/apriorit/pentesting/blob/master/bugs/xnview/0x00000000003283eb.md) | [@expend20](https://twitter.com/expend20) and Anton Kukoba of Apriorit
+| IrfanView | [CVE-2019-13242](https://github.com/apriorit/pentesting/blob/master/bugs/irfanview/0x0000000000013a98.md), [CVE-2019-13243](https://github.com/apriorit/pentesting/blob/master/bugs/irfanview/0x00000000000249c6.md) | [@expend20](https://twitter.com/expend20) and Anton Kukoba of Apriorit
+| FastStone | [CVE-2019-13244](https://github.com/apriorit/pentesting/blob/master/bugs/fsview/0x0000000000002d7d.md), [CVE-2019-13245](https://github.com/apriorit/pentesting/blob/master/bugs/fsview/0x00000000001a95b1.md), [CVE-2019-13246](https://github.com/apriorit/pentesting/blob/master/bugs/fsview/0x00000000001a9601.md) | [@expend20](https://twitter.com/expend20) and Anton Kukoba of Apriorit
+| ACDSee | [CVE-2019-13247](https://github.com/apriorit/pentesting/blob/master/bugs/acdsee/0x00000000000024ed.md), [CVE-2019-13248](https://github.com/apriorit/pentesting/blob/master/bugs/acdsee/0x0000000000002450.md), [CVE-2019-13249](https://github.com/apriorit/pentesting/blob/master/bugs/acdsee/0x00000000000b9e7a.md), [CVE-2019-13250](https://github.com/apriorit/pentesting/blob/master/bugs/acdsee/0x00000000000b9c2f.md), [CVE-2019-13251](https://github.com/apriorit/pentesting/blob/master/bugs/acdsee/0x00000000000c47ff.md), [CVE-2019-13252](https://github.com/apriorit/pentesting/blob/master/bugs/acdsee/0x00000000001172b0.md), [CVE-2019-15293](https://www.apriorit.com/dev-blog/640-qa-fuzzing-for-closed-source-windows-software) | [@expend20](https://twitter.com/expend20) and Anton Kukoba of Apriorit
+| Foxit | [CVE-2019-13330](https://www.zerodayinitiative.com/advisories/ZDI-19-853/), [CVE-2019-13331](https://www.zerodayinitiative.com/advisories/ZDI-19-854/), [CVE-2020-8844](https://www.zerodayinitiative.com/advisories/ZDI-20-200/) | Natnael Samson ([@NattiSamson](https://twitter.com/NattiSamson))
+| Rockwell Automation | [CVE-2020-12034, CVE-2020-12038](https://www.us-cert.gov/ics/advisories/icsa-20-140-01) | [Sharon Brizinov](https://sharonbrizinov.com/) and Amir Preminger of Claroty
+| F-Secure & WithSecure | CVE-2021-33599, CVE-2021-33602, CVE-2021-40836, CVE-2021-40837, CVE-2022-28875, CVE-2022-28876, CVE-2022-28879, CVE-2022-28881, CVE-2022-28882, CVE-2022-28883, CVE-2022-28884, CVE-2022-28886, CVE-2022-28887 | [@faty420](https://twitter.com/faty420)
+
+(Let me know if you know of any others, and I'll include them in the list)
 
 ## Building WinAFL
 
-1. Download and build DynamoRIO sources or download DynamoRIO Windows binary
-package from https://github.com/DynamoRIO/dynamorio/wiki/Downloads
+1. If you are building with DynamoRIO support, download and build
+DynamoRIO sources or download DynamoRIO Windows binary package from
+https://github.com/DynamoRIO/dynamorio/releases
 
-2. Open Visual Studio Command Prompt (or Visual Studio x64 Win64 Command Prompt
+2. If you are building with Intel PT support, pull third party dependencies by running `git submodule update --init --recursive` from the WinAFL source directory
+
+3. Open Visual Studio Command Prompt (or Visual Studio x64 Win64 Command Prompt
 if you want a 64-bit build). Note that you need a 64-bit winafl.dll build if
 you are fuzzing 64-bit targets and vice versa.
 
-3. Go to the directory containing the source
+4. Go to the directory containing the source
 
-4. Type the following commands. Modify the -DDynamoRIO_DIR flag to point to the
+5. Type the following commands. Modify the -DDynamoRIO_DIR flag to point to the
 location of your DynamoRIO cmake files (either full path or relative to the
 source directory).
 
@@ -79,7 +112,7 @@ source directory).
 ```
 mkdir build32
 cd build32
-cmake .. -DDynamoRIO_DIR=..\path\to\DynamoRIO\cmake
+cmake -G"Visual Studio 16 2019" -A Win32 .. -DDynamoRIO_DIR=C:\path\to\DynamoRIO\cmake -DINTELPT=1
 cmake --build . --config Release
 ```
 
@@ -88,16 +121,31 @@ cmake --build . --config Release
 ```
 mkdir build64
 cd build64
-cmake -G"Visual Studio 10 Win64" .. -DDynamoRIO_DIR=..\path\to\DynamoRIO\cmake
+cmake -G"Visual Studio 16 2019" -A x64 .. -DDynamoRIO_DIR=C:\path\to\DynamoRIO\cmake -DINTELPT=1
 cmake --build . --config Release
 ```
 
-## Using WinAFL
+### Build configuration options
 
-Note: If you are using pre-built binaries you'll need to download DynamoRIO
-release 6.2.0-2 from https://github.com/DynamoRIO/dynamorio/wiki/Downloads.
-If you built WinAFL from source, you can use whatever version of DynamoRIO
-you used to build WinAFL.
+The following cmake configuration options are supported:
+
+ - `-DDynamoRIO_DIR=..\path\to\DynamoRIO\cmake` - Needed to build the
+   winafl.dll DynamoRIO client
+
+ - `-DTINYINST=1` - Enable TinyInst mode. For more information see
+   https://github.com/googleprojectzero/winafl/blob/master/readme_tinyinst.md
+
+ - `-DINTELPT=1` - Enable Intel PT mode. For more information see
+   https://github.com/googleprojectzero/winafl/blob/master/readme_pt.md
+
+ - `-DUSE_COLOR=1` - color support (Windows 10 Anniversary edition or higher)
+
+ - `-DUSE_DRSYMS=1` - Drsyms support (use symbols when available to obtain
+   -target_offset from -target_method). Enabling this has been known to cause
+   issues on Windows 10 v1809, though there are workarounds,
+   see https://github.com/googleprojectzero/winafl/issues/145
+
+## Using WinAFL
 
 The command line for afl-fuzz on Windows is different than on Linux. Instead of:
 
@@ -116,139 +164,32 @@ The following afl-fuzz options are supported:
 ```
   -i dir        - input directory with test cases
   -o dir        - output directory for fuzzer findings
-  -D dir        - directory containing DynamoRIO binaries (drrun, drconfig)
   -t msec       - timeout for each run
+  -s            - deliver sample via shared memory
+  -D dir        - directory containing DynamoRIO binaries (drrun, drconfig)
+  -w path       - path to winafl.dll
+  -e            - expert mode to run WinAFL as a DynamoRIO tool
+  -P            - use Intel PT tracing mode
+  -Y            - enable the static instrumentation mode
   -f file       - location read by the fuzzed program
-  -M \\ -S id   - distributed mode
-  -x dir        - optional fuzzer dictionary
   -m limit      - memory limit for the target process
+  -p            - persist DynamoRIO cache across target process restarts
+  -c cpu        - the CPU to run the fuzzed program
+  -d            - quick & dirty mode (skips deterministic steps)
+  -n            - fuzz without instrumentation (dumb mode)
+  -x dir        - optional fuzzer dictionary
+  -I msec       - timeout for process initialization and first run
+  -T text       - text banner to show on the screen
+  -M \\ -S id   - distributed mode
+  -C            - crash exploration mode (the peruvian rabbit thing)
+  -l path       - a path to user-defined DLL for custom test cases processing
+  -A module     - a module identifying a unique process to attach to
 ```
 
 Please refer to the original AFL documentation for more info on these flags.
 
-The following instrumentation options are used:
-
-```
-  -covtype         - the type of coverage being recorded. Supported options are
-                     bb (basic block, default) or edge.
-
-  -coverage_module - module for which to record coverage. Multiple module flags
-                     are supported.
-
-  -target_module   - module which contains the target function to be fuzzed.
-                     Either -target_method or -target_offset need to be
-                     specified together with this option.
-
-  -target_method   - name of the method to fuzz in persistent mode. For this to
-                     work either the method needs to be exported or the symbols
-                     for target_module need to be available. Otherwise use
-                     -target_offset instead.
-
-  -target_offset   - offset of the method to fuzz from the start of the module.
-
-  -fuzz_iterations - Maximum number of iterations for the target function to run
-                     before restarting the target process.
-
-  -nargs           - Number of arguments the fuzzed method takes. This is used
-                     to save/restore the arguments between runs.
-
-  -debug           - Debug mode. Does not try to connect to the server. Outputs
-                     a log file containing loaded modules, opened files and
-                     coverage information.
-
-  -logdir          - specifies in which directory the log file will be written
-                     (only to be used with -debug).
-
-  -call_convention - The default calling convention is cdecl on 32-bit x86
-                     platforms and Microsoft x64 for Visual Studio 64-bit
-                     applications. Possible values:
-                         * fastcall: fastcall
-                         * ms64: Microsoft x64 (Visual Studio)
-                         * stdcall: cdecl or stdcall
-                         * thiscall: thiscall
-
-  -thread_coverage - If set, WinAFL will only collect coverage from a thread
-                     that executed the target function
-```
-
-In general, you should perform the following steps when fuzzing a new target:
-
-1. Make sure your target is running correctly without instrumentations.
-
-2. Open the target binary in WinDbg and locate the function you want to fuzz.
-Note the offset of the function from the start of the module. For example, if
-you want to fuzz the main function and happen to have symbols around, you can
-use the following windbg command:
-
-```
-x test!main
-```
-
-3. Make sure that the target is running correctly under DynamoRIO. For this
-purpose you can use the standalone debug mode of WinAFL client which does not
-require connecting to afl-fuzz. Make sure you use the drrun.exe and winafl.dll
-version which corresponds to your target (32 vs. 64 bit).
-
-Example command line:
-
-```
-path\to\DynamoRIO\bin64\drrun.exe -c winafl.dll -debug
--target_module test_gdiplus.exe -target_offset 0x1270 -fuzz_iterations 10
--nargs 2 -- test_gdiplus.exe input.bmp
-```
-
-You should see the output corresponding to your target function being run 10
-times after which the target executable will exit. A .log file should be
-created in the current directory. The log file contains useful information
-such as the files and modules loaded by the target as well as the dump of AFL
-coverage map. In the log you should see pre_fuzz_handler and post_fuzz_handler
-being run exactly 10 times as well as your input file being open in each
-iteration. Note the list of loaded modules for setting the -coverage_module
-flag. Note that you must use the same values for module names as seen in the
-log file (not case sensitive).
-
-4. Now you should be ready to fuzz the target. First, make sure that both
-afl-fuzz.exe and winafl.dll are in the current directory. As stated earlier,
-the command line for afl-fuzz on Windows is:
-
-```
-afl-fuzz [afl options] -- [instrumentation options] -- target_cmd_line
-```
-
-Please refer above for the list of supported AFL and instrumentation options.
-
-In AFL options, you must specify the DynamoRIO binaries directory via the new
--D option. You need to match the DynamoRIO and winafl.dll build (32 vs. 64 bit)
-to the target binary. -t (timeout) option is mandatory for WinAFL as execution
-time can vary significantly under instrumentation so it's not a good idea to
-rely on the auto-determined values.
-
-You can use the same WinAFL options as in step 2 but remember to exclude the
--debug flag and you'll probably want to increase the iteration count.
-
-As in afl-fuzz on Linux you can replace the input file parameter of the target
-binary with @@.
-
-An example command line would look like:
-
-```
-afl-fuzz.exe -i in -o out -D C:\work\winafl\DynamoRIO\bin64 -t 20000 --
--coverage_module gdiplus.dll -coverage_module WindowsCodecs.dll
--fuzz_iterations 5000 -target_module test_gdiplus.exe -target_offset 0x1270
--nargs 2 -- test_gdiplus.exe @@
-```
-
-Alternately, if symbols for test_gdiplus.exe are available, you can use
--target_method instead of -target_offset like so:
-
-```
-afl-fuzz.exe -i in -o out -D C:\work\winafl\DynamoRIO\bin64 -t 20000 --
--coverage_module gdiplus.dll -coverage_module WindowsCodecs.dll
--fuzz_iterations 5000 -target_module test_gdiplus.exe -target_method main
--nargs 2 -- test_gdiplus.exe @@
-```
-
-That's it. Happy fuzzing!
+To see the supported instrumentation flags, please refer to the documentation
+on the specific instrumentation mode you are interested in (see "Instrumentation modes" below).
 
 ## How does my target run under WinAFL
 
@@ -267,14 +208,44 @@ When you select a target function and fuzz an application the following happens:
 
 The target function should do these things during its lifetime:
 
-1. Open the input file. This needs to happen withing the target function so
+1. Open the input file. This needs to happen within the target function so
    that you can read a new input file for each iteration as the input file is
-   rewritten between target function runs).
+   rewritten between target function runs.
 2. Parse it (so that you can measure coverage of file parsing)
 3. Close the input file. This is important because if the input file is
    not closed WinAFL won't be able to rewrite it.
 4. Return normally (So that WinAFL can "catch" this return and redirect
    execution. "returning" via ExitProcess() and such won't work)
+
+## Instrumentation modes
+
+The following documents provide information on using different instrumentation
+modes with WinAFL:
+
+ - [Dynamic instrumentation using DynamoRIO](https://github.com/googleprojectzero/winafl/blob/master/readme_dr.md)
+ - [Dynamic instrumentation using TinyInst](https://github.com/googleprojectzero/winafl/blob/master/readme_tinyinst.md)
+ - [Hardware tracing using Intel PT](https://github.com/googleprojectzero/winafl/blob/master/readme_pt.md)
+ - [Static instrumentation via Syzygy](https://github.com/googleprojectzero/winafl/blob/master/readme_syzygy.md)
+
+Before using WinAFL for the first time, you should read the documentation for
+the specific instrumentation mode you are interested in. These also contain
+usage examples.
+
+## Attaching to a running process
+
+The DynamoRIO instrumentation mode supports dynamically attaching to running processes. This option can be used to fuzz processes that cannot be directly launched by WinAFL, such as system services.
+
+To use it, specify the `-A <module>` option to `afl-fuzz.exe`, where `<module>` is the name of a module loaded only by the target process (if the module is loaded by more than one process WinAFL will terminate).
+
+WinAFL will attach to the target process, and fuzz it normally. When the target process terminates (regardless of the reason), WinAFL will not restart it, but simply try to reattach. It is assumed that the target process will be restarted by an external script (or by the system itself). If WinAFL will not find the new target process within 10 seconds, it will terminate.
+
+## Sample delivery via shared memory
+
+WinAFL supports delivering samples via shared memory (as opposed to via a file, which is the default). This can be enabled by giving `-s` option to `afl-fuzz.exe`. Shared memory is faster and can avoid some problems with files (e.g. unable to overwrite the sample file because a target maintains a lock on it). 
+If you are using shared memory for sample delivery then you need to make sure that in your harness you specifically read data from shared memory instead of file. Check a simple harness here:
+
+https://github.com/googleprojectzero/Jackalope/blob/6d92931b2cf614699e2a023254d5ee7e20f6e34b/test.cpp#L41  
+https://github.com/googleprojectzero/Jackalope/blob/6d92931b2cf614699e2a023254d5ee7e20f6e34b/test.cpp#L111  
 
 ## Corpus minimization
 
@@ -305,132 +276,76 @@ Examples of use:
 <img alt="winafl-cmin.py" src="screenshots/winafl-cmin.py.png"/>
 </p>
 
-## Statically instrument a binary via [syzygy](https://github.com/google/syzygy)
+## Custom test cases processing
 
-### Background
+WinAFL supports third party DLLs that can be used to define custom test-cases processing (e.g. to send test cases over network). To enable this option, you need to specify ```-l <path>``` argument.
+The DLL should export the following two functions:
+```
+dll_init()
+dll_run(char *data, long size, int fuzz_iterations)
+data - content of test case
+size - size of test case
+fuzz_iterations - defines a current fuzzing iteration number
+```
 
-[syzygy](https://github.com/google/syzygy) provides a framework able to _decompose_
-PE32 binaries with full PDB. _Decomposing_ a binary is the term used to mean taking
-in input a PE32 binary and its PDB, analyze and decompose every functions, every blocks
-of code / data in a safe way and present it to transformation "passes".
-A transformation pass is a class that transforms the binary in some way; an example is the [syzyasan](https://github.com/google/syzygy/blob/master/syzygy/instrument/transforms/asan_transform.h)
-transformation for example. Once the pass has transformed the binary, it passes it back
-to the framework which is able to _relink_ an output binary (with the transformations applied
-of course).
+We have implemented two sample DLLs for network-based applications fuzzing that you can customize for your own purposes.
 
-[AFL instrumentation](https://github.com/google/syzygy/blob/master/syzygy/instrument/transforms/afl_transform.cc) has been added to [syzygy](https://github.com/google/syzygy)'s instrumenter allowing users to instrument PE32
-binaries with private symbols statically.
+### Network fuzzing
 
-<p align="center">
-<img alt="afl instrumentation under IDA" src="screenshots/afl-instr.png"/>
-</p>
-
-### How to write a target function
-
-In order to prepare your target, you need to first include `afl-staticinstr.h` then invoke `__afl_persistent_loop` like in `test_static.cpp`:
+WinAFL's ```custom_net_fuzzer.dll``` allows winAFL to perform network-based applications fuzzing that receive and parse network data. There are several options supported by this DLL that should be provided via the environment variable ```AFL_CUSTOM_DLL_ARGS```:
 
 ```
-int fuzz(int argc, char**argv) {
-  while(__afl_persistent_loop()) {
-    test(argc, argv);
-  }
-  return 1;
+  -a IP address - IP address to send data in
+  -U            - use UDP protocol instead of TCP to send data (default TCP)
+  -p port       - port to send data in
+  -w msec       - delay in milliseconds before actually start fuzzing
+```
+For example, if your application receives network packets via UDP protocol at port 7714 you should set up the environment variable in the following way: ```set AFL_CUSTOM_DLL_ARGS=-U -p 7714 -a 127.0.0.1 -w 1000 ```
+
+You still need to find target function and make sure that this function receives data from the network, parses it, and returns normally. Also, you can use In App Persistence mode described above if your application runs the target function in a loop by its own.
+
+Additionally, this mode is considered as experimental since we have experienced some problems with stability and performance. However, we found this option very useful and managed to find several vulnerabilities in network-based applications (e.g. in Kollective Kontiki listed above).
+
+There is a second DLL ```custom_winafl_server.dll``` that allows winAFL to act as a server and perform fuzzing of client-based applications. All you need is to set up the port to listen on for incoming connections from your target application. The environment variable ```AFL_CUSTOM_DLL_ARGS=<port_id>``` should be used for this purpose.
+
+#### Note
+
+In case of server fuzzing, if the server socket has the `SO_REUSEADDR` option set like the following code, then this may case `10055` error after some time fuzzing due to the accumulation of `TIME_WAIT` sockets when WinAFL restart the fuzzing process. 
+```
+setsockopt(s, SOL_SOCKET, SO_REUSEADDR, (char*)&opt, sizeof(int));
+```
+
+To avoid this, replace the `SO_REUSEADDR` option by `SO_LINGER` option in the server source code if available.
+```
+setsockopt(s, SOL_SOCKET, SO_LINGER, (char*)&opt, sizeof(int));
+```
+
+## Custom mutators
+
+WinAFL supports loading a custom mutator from a third-party DLL.  You need to implement `dll_mutate_testcase` or `dll_mutate_testcase_with_energy` in your DLL and provide the DLL path to WinAFL via `-l <path>` argument.  WinAFL invokes the custom mutator before all the built-in mutations, and the custom mutator can skip all the built-in mutations by returning a non-zero value.  The `dll_mutate_testcase_with_energy` function is additionally provided an energy value that is equivalent to the number of iterations expected to run in the havoc stage without deterministic mutations. The custom mutator should invoke `common_fuzz_stuff` to run and make WinAFL aware of each new test case.  Below is an example mutator that increments every byte by one: 
+
+```c
+u8 dll_mutate_testcase(char **argv, u8 *buf, u32 len, u8 (*common_fuzz_stuff)(char**, u8*, u32))
+{
+    u8 bailout = 0;
+    u8 *newbuf;
+    u32 i;
+    // duplicate the input buffer
+    newbuf = malloc(len);
+    if (!newbuf) return bailout;
+    memcpy(newbuf, buf, len);
+    // increment every byte by one and call common_fuzz_stuff for every new test case
+    for (i = 0; i < len; i++) {
+       newbuf[i] += 1;
+       if (common_fuzz_stuff(argv, newbuf, len)) {
+           bailout = 1; // skip the rest of the mutation per common_fuzz_stuff
+           break;
+       }
+    }
+    free(newbuf);
+    return bailout;
 }
 ```
-
-`__afl_persistent_loop`'s implementation lives inside `afl-staticinstr.c` and basically reproduces what the DynamoRIO plugin is doing in `pre_fuzz_handler` and `post_fuzz_handler`. Every points mentioned in "How to select a target function" applies here too.
-
-You can invoke AFL tools with the flag `-Y` to enable the static instrumentation mode during fuzzing, corpus minimizing or during test-case minimizing:
-
-```
-afl-fuzz.exe -Y -i minset -o o1 -t 10000 -- -fuzz_iterations 5000 -- test_static.instr.exe @@
-winafl-cmin.py -Y -t 100000 -i in -o minset -- test_static.instr.exe @@
-afl-tmin.exe -Y -i ..\testcases\tests\big.txt -o big.min.txt -- test_static.instr.exe @@
-```
-
-### Building instrument.exe
-
-For convenience, a version of instrument.exe confirmed to work with WinAFL is included in the bin32 directory. If you want to build it yourself follow the instructions below.
-
-In order to clone [syzygy](https://github.com/google/syzygy/)'s repository you can follow the instructions outlined here: [SyzygyDevelopmentGuide](https://github.com/google/syzygy/wiki/SyzygyDevelopmentGuide). Once you have `depot_tools` and the repository cloned, you can compile instrument.exe like this:
-
-```
-C:\syzygy\src>ninja -C out\Release instrument
-```
-
-The current recommended revision of the instrumenter is the following: [190dbfe](https://github.com/google/syzygy/commit/190dbfe74c6f5b5913820fa66d9176877924d7c5)(v0.8.32.0).
-
-### Registering msdia140
-
-Make sure to register `msdia140.dll` on your system by executing once the below command:
-
-```
-regsvr32 /s msdia140.dll
-```
-
-### Instrumenting a target
-
-Your target binary must have been compiled with the [/PROFILE](https://msdn.microsoft.com/en-us/library/ays5x7b0.aspx) linker flag in order to generate a full PDB.
-
-```
-C:\>instrument.exe --mode=afl --input-image=test_static.exe --output-image=test_static.instr.exe --force-decompose --multithread --cookie-check-hook
-[0718/224840:INFO:application_impl.h(46)] Syzygy Instrumenter Version 0.8.32.0 (0000000).
-[0718/224840:INFO:application_impl.h(48)] Copyright (c) Google Inc. All rights reserved.
-[0718/224840:INFO:afl_instrumenter.cc(116)] Force decomposition mode enabled.
-[0718/224840:INFO:afl_instrumenter.cc(122)] Thread-safe instrumentation mode enabled.
-[0718/224840:INFO:afl_instrumenter.cc(128)] Cookie check hook mode enabled.
-[...]
-[0718/224840:INFO:security_cookie_check_hook_transform.cc(67)] Found a __report_gsfailure implementation, hooking it now.
-[0718/224840:INFO:add_implicit_tls_transform.cc(77)] The binary doesn't have any implicit TLS slot defined, injecting one.
-[0718/224840:INFO:afl_transform.cc(144)] Placing TLS slot at offset +4.
-[0718/224840:INFO:afl_transform.cc(237)] Code Blocks instrumented: 92 (95%)
-[...]
-[0718/224841:INFO:pe_relinker.cc(240)] PE relinker finished.
-
-C:\>test_static.instr.exe test
-Persistent loop implementation by <0vercl0k@tuxfamily.org>
-Based on WinAFL by <ifratric@google.com>
-[+] Found a statically instrumented module: test_static.instr.exe (multi thread mode).
-[-] Not running under afl-fuzz.exe.
-[+] Enabling the no fuzzing mode.
-Error opening file
-```
-
-#### Available options
-
-```
---config=<path>         Specifies a JSON file describing, either
-                        a whitelist of functions to instrument or
-                        a blacklist of functions to not instrument.
---cookie-check-hook     Hooks __security_cookie_check.
---force-decompose       Forces block decomposition.
---multithread           Uses a thread-safe instrumentation.
-```
-
-* config: The JSON file allows you to scope down the instrumentation to a set of function
-names. You can either [white list](https://github.com/google/syzygy/blob/master/syzygy/instrument/test_data/afl-good-whitelist.json), or [black list](https://github.com/google/syzygy/blob/master/syzygy/instrument/test_data/afl-good-blacklist.json) functions. It can be very useful to blacklist
-functions generating variable behaviors.
-
-* cookie-check-hook: This ensures that the /GS cookie check function generates an exception that
-our [VEH](https://msdn.microsoft.com/en-us/library/windows/desktop/ms681420(v=vs.85).aspx) can catch. Failfast exceptions are not catchable by any EH mechanisms in-proc, so we leverage
-[syzygy](https://github.com/google/syzygy) to rewrite the cookie check function in order to generate
-[an exception we can catch](https://github.com/google/syzygy/blob/master/syzygy/instrument/transforms/security_cookie_check_hook_transform.cc#L81).
-
-* force-decompose: This switch lets you override the decision that [syzygy](https://github.com/google/syzygy/blob/master/syzygy/pe/pe_transform_policy.cc#L175) makes when evaluating
-if a function is safe to decompose. If you turn on this flag, your instrumentation coverage will be
-higher but you might end-up in an executable that *crashes* in weird ways. Only use if you know what you
-are doing.
-
-* multithread: This switch turns on the thread-safe instrumentation. The major difference with the single
-thread instrumentation is that `__afl_prev_loc` will be stored in a TLS slot.
-
-### Limitations
-
-With great power comes great responsibility, so here is the list of limitations:
-
-1. Instrumentation is limited to PE 32bits binaries with full PDB symbols (linker flag `/PROFILE`).
-
-2. [syzygy](https://github.com/google/syzygy/) defines [several pre-requirements](https://github.com/google/syzygy/blob/master/syzygy/pe/pe_transform_policy.cc#L175) for being able to decompose safely a block; this might explain why your instrumentation percentage is low.
 
 ## FAQ
 
@@ -447,8 +362,8 @@ A: This can commonly happen for several reasons
    slowdowns. You will be able to see this in the debug log. To
    resolve, select (or write) your target function differently.
  - Your target function does not close the input file properly, which
-   causes WinAFL to kill the process in order to rewrite it. Please refer
-   to 6) for what a target function should look like.
+   causes WinAFL to kill the process in order to rewrite it. Please refer to
+   "How to select a target function" for what a target function should look like.
 
 Q: Can I fuzz DLLs with WinAFL
 A: Yes, if you can write a harness that loads a library and runs some

@@ -188,7 +188,7 @@ char *alloc_printf(const char *_str, ...) {
   _len = vsnprintf(NULL, 0, _str, argptr);
   if (_len < 0) FATAL("Whoa, snprintf() fails?!");
   _tmp = ck_alloc(_len + 1);
-  vsnprintf(_tmp, _len + 1, _str, argptr);
+  vsnprintf(_tmp, (size_t)_len + 1, _str, argptr);
   va_end(argptr);
   return _tmp;
 
@@ -284,7 +284,7 @@ static u32 write_results(void) {
 
   if (!strncmp(out_file, "/dev/", 5)) {
 
-    fd = _open(out_file, O_WRONLY, 0600);
+    fd = _open(out_file, O_WRONLY, DEFAULT_PERMISSION);
     if (fd < 0) PFATAL("Unable to open '%s'", out_file);
 
   } else if (!strcmp(out_file, "-")) {
@@ -294,8 +294,7 @@ static u32 write_results(void) {
 
   } else {
 
-    _unlink(out_file); /* Ignore errors */
-    fd = _open(out_file, O_WRONLY | O_CREAT | O_EXCL, 0600);
+    fd = _open(out_file, O_WRONLY | O_CREAT | O_TRUNC, DEFAULT_PERMISSION);
     if (fd < 0) PFATAL("Unable to create '%s'", out_file);
 
   }
@@ -546,6 +545,9 @@ static void create_target_process(char** argv) {
     pidsize = ftell(fp);
     fseek(fp,0,SEEK_SET);
     buf = (char *)malloc(pidsize+1);
+    if (!buf) {
+        FATAL("Error allocating %Iu bytes", pidsize + 1);
+    }
     fread(buf, pidsize, 1, fp);
     buf[pidsize] = 0;
     fclose(fp);
@@ -703,6 +705,18 @@ static void run_target(char** argv) {
   child_timed_out = 0;
   memset(trace_bits, 0, MAP_SIZE);
 
+  //TEMPORARY FIX FOR REGULAR USAGE OF AFL-TMIN
+  ReadFile(pipe_handle, &result, 1, &num_read, NULL);
+  if (result == 'K')
+  {
+	  //a workaround for first cycle
+	  ReadFile(pipe_handle, &result, 1, &num_read, NULL);
+  }
+  if (result != 'P')
+  {
+	  FATAL("Unexpected result from pipe! expected 'P', instead received '%c'\n", result);
+  }
+  //END OF TEMPORARY FIX FOR REGULAR USAGE OF AFL-TMIN
   WriteFile( 
     pipe_handle,  // handle to pipe 
     command,      // buffer to write from 
@@ -839,7 +853,8 @@ static void usage(u8* argv0) {
        "Other settings:\n\n"
 
        "  -q            - sink program's output and don't show messages\n"
-       "  -e            - show edge coverage only, ignore hit counts\n\n"
+       "  -e            - show edge coverage only, ignore hit counts\n"
+       "  -V            - show version number and exit\n\n"
 
        "This tool displays raw tuple data captured by AFL instrumentation.\n"
        "For additional help, consult %s\\README.\n\n" cRST,
@@ -948,6 +963,10 @@ int main(int argc, char** argv) {
   optind = 1;
   dynamorio_dir = NULL;
   client_params = NULL;
+
+#ifdef USE_COLOR
+  enable_ansi_console();
+#endif
 
   while ((opt = getopt(argc, argv, "+o:m:t:A:D:eqZQbY")) > 0)
 
@@ -1062,6 +1081,11 @@ int main(int argc, char** argv) {
         drioless = 1;
         break;
 
+      case 'V':
+
+        show_banner();
+        exit(0);
+
       default:
 
         usage(argv[0]);
@@ -1089,7 +1113,7 @@ int main(int argc, char** argv) {
     // Find the name of the target executable in the arguments
     for(; i < argc; i++) {
       if(strcmp(argv[i], "--") == 0) counter++;
-      if(counter == 2) {
+      if(counter == (drioless ? 1:2)) {
         if(i != (argc - 1)) {
           target_path = argv[i + 1];
         }

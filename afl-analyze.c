@@ -1,12 +1,14 @@
 /*
-   american fuzzy lop - test case minimizer
-   ----------------------------------------
+   american fuzzy lop - file format analyzer
+   -----------------------------------------
 
    Written and maintained by Michal Zalewski <lcamtuf@google.com>
 
-   Windows fork written by Axel "0vercl0k" Souchet <0vercl0k@tuxfamily.org>
+   Windows fork written by @_L4ys
 
-   Copyright 2017 Google Inc. All rights reserved.
+   Based on afl-showmap by Axel "0vercl0k" Souchet <0vercl0k@tuxfamily.org>
+
+   Copyright 2016, 2017 Google Inc. All rights reserved.
 
    Licensed under the Apache License, Version 2.0 (the "License");
    you may not use this file except in compliance with the License.
@@ -14,16 +16,18 @@
 
      http://www.apache.org/licenses/LICENSE-2.0
 
-   A simple test case minimizer that takes an input file and tries to remove
-   as much data as possible while keeping the binary in a crashing state
-   *or* producing consistent instrumentation output (the mode is auto-selected
-   based on the initially observed behavior).
+   A nifty utility that grabs an input file and takes a stab at explaining
+   its structure by observing how changes to it affect the execution path.
+
+   If the output scrolls past the edge of the screen, pipe it to 'less -r'.
 
  */
+
 #define _CRT_SECURE_NO_WARNINGS
 #define _CRT_RAND_S
+#define VERSION             "2.52b"
+
 #define AFL_MAIN
-#define VERSION             "2.51b"
 
 #include <windows.h>
 
@@ -39,73 +43,72 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include <errno.h>
-#include <signal.h>
 #include <fcntl.h>
+#include <ctype.h>
 
 #include <sys/stat.h>
-#include <sys/types.h>
 
 static s32 child_pid;                 /* PID of the tested program         */
 
 static HANDLE child_handle,
-              child_thread_handle;
+child_thread_handle;
 static char *dynamorio_dir;
 static char *client_params;
-int fuzz_iterations_max = 1, fuzz_iterations_current;
 
 static CRITICAL_SECTION critical_section;
 static u64 watchdog_timeout_time;
 static u8 watchdog_enabled;
 static u8 *target_cmd;                /* command line of target           */
 
-static u8 *trace_bits,                /* SHM with instrumentation bitmap   */
-          *mask_bitmap;               /* Mask for trace bits (-B)          */
-
-static u8 *in_file,                   /* Minimizer input test case         */
-          *out_file,                  /* Minimizer output file             */
-          *prog_in,                   /* Targeted program input file       */
-          *target_path,               /* Path to target binary             */
-          *doc_path,                  /* Path to docs                      */
-          *at_file;                   /* Substitution string for @@        */
-
-static u8 *in_data,                   /* Input data for trimming           */
-          *prev_data;                 /* Data of previous attempt          */
-
-static u32 in_len,                    /* Input data length                 */
-           prev_len,                  /* Data length of previous attempt   */
-           orig_cksum,                /* Original checksum                 */
-           total_execs,               /* Total number of execs             */
-           missed_hangs,              /* Misses due to hangs               */
-           missed_crashes,            /* Misses due to crashes             */
-           missed_paths,              /* Misses due to exec path diffs     */
-           exec_tmout = EXEC_TIMEOUT; /* Exec timeout (ms)                 */
-
-static u64 mem_limit = MEM_LIMIT,     /* Memory limit (MB)                 */
-           start_time;                /* Tick count at the beginning       */
-
 static HANDLE shm_handle;             /* Handle of the SHM region         */
 static HANDLE pipe_handle;            /* Handle of the name pipe          */
 static u64    name_seed;              /* Random integer to have a unique shm/pipe name */
 static HANDLE devnul_handle;          /* Handle of the nul device         */
 static u8     sinkhole_stds = 1;      /* Sink-hole stdout/stderr messages?*/
-static char   *fuzzer_id = NULL;      /* The fuzzer ID or a randomized 
+static char   *fuzzer_id = NULL;      /* The fuzzer ID or a randomized
                                          seed allowing multiple instances */
 
-static u8  crash_mode,                /* Crash-centric mode?               */
-           exit_crash,                /* Treat non-zero exit as crash?     */
-           edges_only,                /* Ignore hit counts?                */
-           exact_mode,                /* Require path match for crashes?   */
-           no_minimize = 0,           /* Skip minimization phase           */
-           no_normalize = 0,          /* Skip normalization phases         */
-           single_pass = 0,           /* Run only a single pass            */
-           dump_on_abort = 1,         /* Dump partial results to a file on Ctrl+C */
+static u8* trace_bits;                /* SHM with instrumentation bitmap   */
+
+static u8 *in_file,                   /* Analyzer input test case          */
+          *prog_in,                   /* Targeted program input file       */
+          *target_path,               /* Path to target binary             */
+          *doc_path;                  /* Path to docs                      */
+
+static u8 *in_data;                   /* Input data for analysis           */
+
+static u32 in_len,                    /* Input data length                 */
+           orig_cksum,                /* Original checksum                 */
+           total_execs,               /* Total number of execs             */
+           exec_hangs,                /* Total number of hangs             */
+           exec_tmout = EXEC_TIMEOUT; /* Exec timeout (ms)                 */
+
+static u64 mem_limit = MEM_LIMIT;     /* Memory limit (MB)                 */
+
+static s32 shm_id,                    /* ID of the SHM region              */
+           dev_null_fd = -1;          /* FD to /dev/null                   */
+
+static u8  edges_only,                /* Ignore hit counts?                */
+           use_hex_offsets,           /* Show hex offsets?                 */
            use_stdin = 1,             /* Use stdin for program input?      */
-           drioless = 0;
+           drioless = 0;              /* Running without DRIO?             */
+
 
 static volatile u8
            stop_soon,                 /* Ctrl-C pressed?                   */
            child_timed_out;           /* Child timed out?                  */
+
+
+/* Constants used for describing byte behavior. */
+
+#define RESP_NONE       0x00          /* Changing byte is a no-op.         */
+#define RESP_MINOR      0x01          /* Some changes have no effect.      */
+#define RESP_VARIABLE   0x02          /* Changes produce variable paths.   */
+#define RESP_FIXED      0x03          /* Changes produce fixed patterns.   */
+
+#define RESP_LEN        0x04          /* Potential length field            */
+#define RESP_CKSUM      0x05          /* Potential checksum                */
+#define RESP_SUSPECT    0x06          /* Potential "suspect" blob          */
 
 
 /* Classify tuple counts. This is a slow & naive version, but good enough here. */
@@ -115,8 +118,7 @@ static volatile u8
 #define AREP32(_sym)  AREP16(_sym), AREP16(_sym)
 #define AREP64(_sym)  AREP32(_sym), AREP32(_sym)
 #define AREP128(_sym) AREP64(_sym), AREP64(_sym)
-
-static const u8 count_class_lookup[256] = {
+static u8 count_class_lookup[256] = {
 
   /* 0 - 3:       4 */ 0, 1, 2, 4,
   /* 4 - 7:      +4 */ AREP4(8),
@@ -150,25 +152,6 @@ static void classify_counts(u8* mem) {
 }
 
 
-/* Apply mask to classified bitmap (if set). */
-
-static void apply_mask(u32* mem, u32* mask) {
-
-  u32 i = (MAP_SIZE >> 2);
-
-  if (!mask) return;
-
-  while (i--) {
-
-    *mem &= ~*mask;
-    mem++;
-    mask++;
-
-  }
-
-}
-
-
 /* See if any bytes are set in the bitmap. */
 
 static inline u8 anything_set(void) {
@@ -187,28 +170,13 @@ static inline u8 anything_set(void) {
 
 static u64 get_cur_time(void) {
 
-  u64 ret;
-  FILETIME filetime;
-  GetSystemTimeAsFileTime(&filetime);
+    u64 ret;
+    FILETIME filetime;
+    GetSystemTimeAsFileTime(&filetime);
 
-  ret = (((u64)filetime.dwHighDateTime)<<32) + (u64)filetime.dwLowDateTime;
+    ret = (((u64)filetime.dwHighDateTime) << 32) + (u64)filetime.dwLowDateTime;
 
-  return ret / 10000;
-
-}
-
-
-/* Get unix time in microseconds */
-
-static u64 get_cur_time_us(void) {
-
-  u64 ret;
-  FILETIME filetime;
-  GetSystemTimeAsFileTime(&filetime);
-
-  ret = (((u64)filetime.dwHighDateTime)<<32) + (u64)filetime.dwLowDateTime;
-
-  return ret / 10;
+    return ret / 10000;
 
 }
 
@@ -236,7 +204,7 @@ static void remove_shm(void) {
 
   UnmapViewOfFile(trace_bits);
   CloseHandle(shm_handle);
-  if (prog_in) unlink(prog_in); /* Ignore errors */
+  if (prog_in) _unlink(prog_in); /* Ignore errors */
 
 }
 
@@ -325,8 +293,6 @@ static void read_initial_file(void) {
 
   in_len  = st.st_size;
   in_data = ck_alloc_nozero(in_len);
-  prev_len = -1;
-  prev_data = ck_alloc_nozero(in_len);
 
   ck_read(fd, in_data, in_len, in_file);
 
@@ -352,6 +318,17 @@ static void write_to_file(u8* path, u8* mem, u32 len) {
   _close(ret);
 
 }
+
+
+/* Handle timeout signal. */
+
+/*static void handle_timeout(int sig) {
+
+  child_timed_out = 1;
+  if (child_pid > 0) kill(child_pid, SIGKILL);
+
+}*/
+
 
 //quoting on Windows is weird
 size_t ArgvQuote(char *in, char *out) {
@@ -422,7 +399,7 @@ char *argv_to_cmd(char** argv) {
 
   for (i = 0; argv[i]; i++)
     len += ArgvQuote(argv[i], NULL) + 1;
-
+  
   if(!len) FATAL("Error creating command line");
 
   buf = ret = ck_alloc(len);
@@ -440,7 +417,6 @@ char *argv_to_cmd(char** argv) {
 
   return ret;
 }
-
 
 static void create_target_process(char** argv) {
   char* cmd;
@@ -585,16 +561,7 @@ static void destroy_target_process(int wait_exit) {
   BOOL still_alive = TRUE;
   STARTUPINFO si;
   PROCESS_INFORMATION pi;
-  BOOL no_hang = (wait_exit == -1);
 
-  // Hack, to allow telling this function not to hang.
-  // If the target process is terminating and still has pending I/O, it won't actually finish.
-  //  Calling DisconnectNamedPipe or CloseHandle on the pipe handle may hang indefinitely.
-  //  Skipping those calls might leak the target process (for a while or indefinitely),
-  //  but at least the current process would be allowed to finish.
-  if (wait_exit == -1) {
-    wait_exit = 0;
-  }
   EnterCriticalSection(&critical_section);
 
   if(!child_handle) {
@@ -616,7 +583,7 @@ static void destroy_target_process(int wait_exit) {
     ZeroMemory( &pi, sizeof(pi) );
 
     if(!CreateProcess(NULL, kill_cmd, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) {
-      FATAL("CreateProcess(drconfig) failed, GLE=%d.\n", GetLastError());
+      FATAL("CreateProcess failed, GLE=%d.\n", GetLastError());
     }
 
     CloseHandle(pi.hProcess);
@@ -636,7 +603,7 @@ static void destroy_target_process(int wait_exit) {
     kill_cmd = alloc_printf("taskkill /PID %d /F", child_pid);
 
     if(!CreateProcess(NULL, kill_cmd, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) {
-      FATAL("CreateProcess(taskkill) failed, GLE=%d.\n", GetLastError());
+      FATAL("CreateProcess failed, GLE=%d.\n", GetLastError());
     }
 
     CloseHandle(pi.hProcess);
@@ -659,10 +626,8 @@ static void destroy_target_process(int wait_exit) {
   leave:
   //close the pipe
   if(pipe_handle) {
-    if (!no_hang) {
-      DisconnectNamedPipe(pipe_handle);
-      CloseHandle(pipe_handle);
-    }
+    DisconnectNamedPipe(pipe_handle);
+    CloseHandle(pipe_handle);
 
     pipe_handle = NULL;
   }
@@ -695,30 +660,25 @@ static int is_child_running() {
    return (child_handle && (WaitForSingleObject(child_handle, 0 ) == WAIT_TIMEOUT));
 }
 
+/* Execute target application. Returns exec checksum, or 0 if program
+   times out. */
 
-/* Execute target application. Returns 0 if the changes are a dud, or
-   1 if they should be kept. */
+static u32 run_target(char** argv, u8* mem, u32 len, u8 first_run) {
 
-static u8 run_target(char** argv, u8* mem, u32 len, u8 first_run) {
-
+  int status = 0;
   char command[] = "F";
   DWORD num_read;
   char result = 0;
-  u8 child_crashed;
   u32 cksum;
 
-  // Skip run if buffer is identical to previous run
-  if ((len == prev_len) && (0 == memcmp(prev_data, mem, len))) return 0;
-
-  prev_len = len;
-  memcpy(prev_data, mem, len);
+  memset(trace_bits, 0, MAP_SIZE);
+  MemoryBarrier();
 
   write_to_file(prog_in, mem, len);
 
-  if(!is_child_running()) {
-    destroy_target_process(0);
-    create_target_process(argv);
-    fuzz_iterations_current = 0;
+  if (!is_child_running()) {
+      destroy_target_process(0);
+      create_target_process(argv);
   }
 
   child_timed_out = 0;
@@ -729,34 +689,31 @@ static u8 run_target(char** argv, u8* mem, u32 len, u8 first_run) {
   ReadFile(pipe_handle, &result, 1, &num_read, NULL);
   if (result == 'K')
   {
-	  //a workaround for first cycle
-	  ReadFile(pipe_handle, &result, 1, &num_read, NULL);
+      //a workaround for first cycle
+      ReadFile(pipe_handle, &result, 1, &num_read, NULL);
   }
   if (result != 'P')
   {
-      if (result == 0) {
-          FATAL("Reading from pipe failed! GLE=%lu\n", GetLastError()); // This may happen if the target process crashes before reaching the target function
-      }
-	  FATAL("Unexpected result from pipe! expected 'P', instead received '%c'\n", result);
+      FATAL("Unexpected result from pipe! expected 'P', instead received '%c'\n", result);
   }
   //END OF TEMPORARY FIX FOR REGULAR USAGE OF AFL-TMIN
   WriteFile(
-    pipe_handle,  // handle to pipe
-    command,      // buffer to write from
-    1,            // number of bytes to write
-    &num_read,    // number of bytes written
-    NULL);        // not overlapped I/O
+      pipe_handle,  // handle to pipe
+      command,      // buffer to write from
+      1,            // number of bytes to write
+      &num_read,    // number of bytes written
+      NULL);        // not overlapped I/O
 
   watchdog_timeout_time = get_cur_time() + exec_tmout;
 
-  if(exec_tmout) {
-    watchdog_enabled = 1;
+  if (exec_tmout) {
+      watchdog_enabled = 1;
   }
 
   ReadFile(pipe_handle, &result, 1, &num_read, NULL);
 
-  if(exec_tmout) {
-    watchdog_enabled = 0;
+  if (exec_tmout) {
+      watchdog_enabled = 0;
   }
 
   MemoryBarrier();
@@ -764,394 +721,363 @@ static u8 run_target(char** argv, u8* mem, u32 len, u8 first_run) {
   /* Clean up bitmap, analyze exit condition, etc. */
 
   classify_counts(trace_bits);
-  apply_mask((u32*)trace_bits, (u32*)mask_bitmap);
   total_execs++;
-  fuzz_iterations_current++;
 
-  if(fuzz_iterations_current == fuzz_iterations_max) {
-    destroy_target_process(2000);
-  }
+  destroy_target_process(2000);
 
   if (stop_soon) {
-    SAYF(cRST cLRD "\n+++ Minimization aborted by user +++\n" cRST);
-    Sleep(200); // Allow time to dump partial results
+    SAYF(cRST cLRD "\n+++ Analysis aborted by user +++\n" cRST);
     exit(1);
   }
-
-  child_crashed = result == 'C';
 
   /* Always discard inputs that time out. */
 
   if (child_timed_out) {
 
-    missed_hangs++;
-    return 0;
-
-  }
-
-  /* Handle crashing inputs depending on current mode. */
-
-  if (child_crashed) {
-
-    if (first_run) crash_mode = 1;
-
-    if (crash_mode) {
-
-      if (!exact_mode) return 1;
-
-    } else {
-
-      missed_crashes++;
-      return 0;
-
-    }
-
-  } else
-
-  /* Handle non-crashing inputs appropriately. */
-
-  if (crash_mode) {
-
-    missed_paths++;
+    exec_hangs++;
     return 0;
 
   }
 
   cksum = hash32(trace_bits, MAP_SIZE, HASH_CONST);
+
+  /* We don't actually care if the target is crashing or not,
+     except that when it does, the checksum should be different. */
+
+  cksum ^= 0xffffffff;
+
   if (first_run) orig_cksum = cksum;
 
-  if (orig_cksum == cksum) return 1;
-
-  missed_paths++;
-  return 0;
+  return cksum;
 
 }
 
 
-/* Find first power of two greater or equal to val. */
+#ifdef USE_COLOR
 
-static u32 next_p2(u32 val) {
+/* Helper function to display a human-readable character. */
 
-  u32 ret = 1;
-  while (val > ret) ret <<= 1;
-  return ret;
+static void show_char(u8 val) {
+
+  if (val <= 32 || val >= 127)
+    SAYF("#%02x", val);
+  else
+    SAYF(" %c ", val);
 
 }
 
 
-/* Actually minimize! */
+/* Show the legend */
 
-static void minimize(char** argv) {
+static void show_legend(void) {
 
-  static u32 alpha_map[256];
+  SAYF("    " cLGR bgGRA " 01 " cRST " - no-op block              "
+              cBLK bgLGN " 01 " cRST " - suspected length field\n"
+       "    " cBRI bgGRA " 01 " cRST " - superficial content      "
+              cBLK bgYEL " 01 " cRST " - suspected cksum or magic int\n"
+       "    " cBLK bgCYA " 01 " cRST " - critical stream          "
+              cBLK bgLRD " 01 " cRST " - suspected checksummed block\n"
+       "    " cBLK bgMGN " 01 " cRST " - \"magic value\" section\n\n");
 
-  u8* tmp_buf = ck_alloc_nozero(in_len);
-  u32 orig_len = in_len, stage_o_len;
+}
 
-  u32 del_len, set_len, del_pos, set_pos, i, alpha_size, cur_pass = 0;
-  u32 syms_removed, alpha_del0 = 0, alpha_del1, alpha_del2, alpha_d_total = 0;
-  u8  changed_any, prev_del;
+#endif /* USE_COLOR */
 
-  /***********************
-   * BLOCK NORMALIZATION *
-   ***********************/
 
-  if (no_normalize) goto next_pass;
-  set_len    = next_p2(in_len / TMIN_SET_STEPS);
-  set_pos    = 0;
+/* Interpret and report a pattern in the input file. */
 
-  if (set_len < TMIN_SET_MIN_SIZE) set_len = TMIN_SET_MIN_SIZE;
+static void dump_hex(u8* buf, u32 len, u8* b_data) {
 
-  ACTF(cBRI "Stage #0: " cRST "One-time block normalization...");
+  u32 i;
 
-  while (set_pos < in_len) {
+  for (i = 0; i < len; i++) {
 
-    u8  res;
-    u32 use_len = MIN(set_len, in_len - set_pos);
+#ifdef USE_COLOR
+    u32 rlen = 1, off;
+#else
+    u32 rlen = 1;
+#endif /* ^USE_COLOR */
 
-    for (i = 0; i < use_len; i++)
-      if (in_data[set_pos + i] != '0') break;
+    u8  rtype = b_data[i] & 0x0f;
 
-    if (i != use_len) {
+    /* Look ahead to determine the length of run. */
 
-      memcpy(tmp_buf, in_data, in_len);
-      memset(tmp_buf + set_pos, '0', use_len);
+    while (i + rlen < len && (b_data[i] >> 7) == (b_data[i + rlen] >> 7)) {
 
-      res = run_target(argv, tmp_buf, in_len, 0);
+      if (rtype < (b_data[i + rlen] & 0x0f)) rtype = b_data[i + rlen] & 0x0f;
+      rlen++;
 
-      if (res) {
+    }
 
-        memset(in_data + set_pos, '0', use_len);
-        changed_any = 1;
-        alpha_del0 += use_len;
+    /* Try to do some further classification based on length & value. */
+
+    if (rtype == RESP_FIXED) {
+
+      switch (rlen) {
+
+        case 2: {
+
+            u16 val = *(u16*)(in_data + i);
+
+            /* Small integers may be length fields. */
+
+            if (val && (val <= in_len || SWAP16(val) <= in_len)) {
+              rtype = RESP_LEN;
+              break;
+            }
+
+            /* Uniform integers may be checksums. */
+
+            if (val && abs(in_data[i] - in_data[i + 1]) > 32) {
+              rtype = RESP_CKSUM;
+              break;
+            }
+
+            break;
+
+          }
+
+        case 4: {
+
+            u32 val = *(u32*)(in_data + i);
+
+            /* Small integers may be length fields. */
+
+            if (val && (val <= in_len || SWAP32(val) <= in_len)) {
+              rtype = RESP_LEN;
+              break;
+            }
+
+            /* Uniform integers may be checksums. */
+
+            if (val && (in_data[i] >> 7 != in_data[i + 1] >> 7 ||
+                in_data[i] >> 7 != in_data[i + 2] >> 7 ||
+                in_data[i] >> 7 != in_data[i + 3] >> 7)) {
+              rtype = RESP_CKSUM;
+              break;
+            }
+
+            break;
+
+          }
+
+        default: 
+            if (rtype == 1 || rtype == 3 || (rtype >= 5 && rtype <= MAX_AUTO_EXTRA - 1))
+                break;
+            rtype = RESP_SUSPECT;
 
       }
 
     }
 
-    set_pos += set_len;
+    /* Print out the entire run. */
 
-  }
+#ifdef USE_COLOR
 
-  alpha_d_total += alpha_del0;
+    for (off = 0; off < rlen; off++) {
 
-  OKF("Block normalization complete, %u byte%s replaced.", alpha_del0,
-      alpha_del0 == 1 ? "" : "s");
+      /* Every 16 digits, display offset. */
 
-next_pass:
+      if (!((i + off) % 16)) {
 
-  ACTF(cYEL "--- " cBRI "Pass #%u " cYEL "---", ++cur_pass);
-  changed_any = 0;
+        if (off) SAYF(cRST cLCY ">");
 
-  /******************
-   * BLOCK DELETION *
-   ******************/
+        if (use_hex_offsets)
+          SAYF(cRST cGRA "%s[%06x] " cRST, (i + off) ? "\n" : "", i + off);
+        else
+          SAYF(cRST cGRA "%s[%06u] " cRST, (i + off) ? "\n" : "", i + off);
 
-  if (no_minimize) goto alphabet_minimization;
-  del_len = next_p2(in_len / TRIM_START_STEPS);
-  stage_o_len = in_len;
+      }
 
-  ACTF(cBRI "Stage #1: " cRST "Removing blocks of data...");
+      switch (rtype) {
 
-next_del_blksize:
+        case RESP_NONE:     SAYF(cLGR bgGRA); break;
+        case RESP_MINOR:    SAYF(cBRI bgGRA); break;
+        case RESP_VARIABLE: SAYF(cBLK bgCYA); break;
+        case RESP_FIXED:    SAYF(cBLK bgMGN); break;
+        case RESP_LEN:      SAYF(cBLK bgLGN); break;
+        case RESP_CKSUM:    SAYF(cBLK bgYEL); break;
+        case RESP_SUSPECT:  SAYF(cBLK bgLRD); break;
 
-  if (!del_len) del_len = 1;
-  del_pos  = 0;
-  prev_del = 1;
+      }
 
-  SAYF(cGRA "    Block length = %u, remaining size = %u\n" cRST,
-       del_len, in_len);
+      show_char(in_data[i + off]);
 
-  while (del_pos < in_len) {
-
-    u8  res;
-    s32 tail_len;
-
-    tail_len = in_len - del_pos - del_len;
-    if (tail_len < 0) tail_len = 0;
-
-    /* If we have processed at least one full block (initially, prev_del == 1),
-       and we did so without deleting the previous one, and we aren't at the
-       very end of the buffer (tail_len > 0), and the current block is the same
-       as the previous one... skip this step as a no-op. */
-
-    if (!prev_del && tail_len && !memcmp(in_data + del_pos - del_len,
-        in_data + del_pos, del_len)) {
-
-      del_pos += del_len;
-      continue;
+      if (off != rlen - 1 && (i + off + 1) % 16) SAYF(" "); else SAYF(cRST " ");
 
     }
 
-    prev_del = 0;
+#else
 
-    /* Head */
-    memcpy(tmp_buf, in_data, del_pos);
+    if (use_hex_offsets)
+      SAYF("    Offset %x, length %u: ", i, rlen);
+    else
+      SAYF("    Offset %u, length %u: ", i, rlen);
 
-    /* Tail */
-    memcpy(tmp_buf + del_pos, in_data + del_pos + del_len, tail_len);
+    switch (rtype) {
 
-    res = run_target(argv, tmp_buf, del_pos + tail_len, 0);
-
-    if (res) {
-
-      memcpy(in_data, tmp_buf, (size_t)del_pos + tail_len);
-      prev_del = 1;
-      in_len   = del_pos + tail_len;
-
-      changed_any = 1;
-
-    } else del_pos += del_len;
-
-  }
-
-  if (del_len > 1 && in_len >= 1) {
-
-    del_len /= 2;
-    goto next_del_blksize;
-
-  }
-
-  OKF("Block removal complete, %u bytes deleted.", stage_o_len - in_len);
-
-  if (!in_len && changed_any)
-    WARNF(cLRD "Down to zero bytes - check the command line and mem limit!" cRST);
-
-  if (cur_pass > 1 && !changed_any) goto finalize_all;
-
-  /*************************
-   * ALPHABET MINIMIZATION *
-   *************************/
-
-alphabet_minimization:
-  if (no_normalize) goto finalize_all;
-  alpha_size   = 0;
-  alpha_del1   = 0;
-  syms_removed = 0;
-
-  memset(alpha_map, 0, 256 * sizeof(u32));
-
-  for (i = 0; i < in_len; i++) {
-    if (!alpha_map[in_data[i]]) alpha_size++;
-    alpha_map[in_data[i]]++;
-  }
-
-  ACTF(cBRI "Stage #2: " cRST "Minimizing symbols (%u code point%s)...",
-       alpha_size, alpha_size == 1 ? "" : "s");
-
-  for (i = 0; i < 256; i++) {
-
-    u32 r;
-    u8 res;
-
-    if (i == '0' || !alpha_map[i]) continue;
-
-    memcpy(tmp_buf, in_data, in_len);
-
-    for (r = 0; r < in_len; r++)
-      if (tmp_buf[r] == i) tmp_buf[r] = '0';
-
-    res = run_target(argv, tmp_buf, in_len, 0);
-
-    if (res) {
-
-      memcpy(in_data, tmp_buf, in_len);
-      syms_removed++;
-      alpha_del1 += alpha_map[i];
-      changed_any = 1;
+      case RESP_NONE:     SAYF("no-op block\n"); break;
+      case RESP_MINOR:    SAYF("superficial content\n"); break;
+      case RESP_VARIABLE: SAYF("critical stream\n"); break;
+      case RESP_FIXED:    SAYF("\"magic value\" section\n"); break;
+      case RESP_LEN:      SAYF("suspected length field\n"); break;
+      case RESP_CKSUM:    SAYF("suspected cksum or magic int\n"); break;
+      case RESP_SUSPECT:  SAYF("suspected checksummed block\n"); break;
 
     }
 
-  }
+#endif /* ^USE_COLOR */
 
-  alpha_d_total += alpha_del1;
-
-  OKF("Symbol minimization finished, %u symbol%s (%u byte%s) replaced.",
-      syms_removed, syms_removed == 1 ? "" : "s",
-      alpha_del1, alpha_del1 == 1 ? "" : "s");
-
-  /**************************
-   * CHARACTER MINIMIZATION *
-   **************************/
-
-  alpha_del2 = 0;
-
-  ACTF(cBRI "Stage #3: " cRST "Character minimization...");
-
-  memcpy(tmp_buf, in_data, in_len);
-
-  for (i = 0; i < in_len; i++) {
-
-    u8 res, orig = tmp_buf[i];
-
-    if (orig == '0') continue;
-    tmp_buf[i] = '0';
-
-    res = run_target(argv, tmp_buf, in_len, 0);
-
-    if (res) {
-
-      in_data[i] = '0';
-      alpha_del2++;
-      changed_any = 1;
-
-    } else tmp_buf[i] = orig;
+    i += rlen - 1;
 
   }
 
-  alpha_d_total += alpha_del2;
-
-  OKF("Character minimization done, %u byte%s replaced.",
-      alpha_del2, alpha_del2 == 1 ? "" : "s");
-
-  if (changed_any && !single_pass) goto next_pass;
-
-finalize_all:
-
-  SAYF("\n"
-       cGRA "      Finished minimizing : " cRST "%hs\n"
-       cGRA "     File size reduced by : " cRST "%0.02f%% (to %u byte%s)\n"
-       cGRA "    Characters simplified : " cRST "%0.02f%%\n"
-       cGRA "     Number of execs done : " cRST "%u\n"
-       cGRA "          Fruitless execs : " cRST "path=%u crash=%u hang=%s%u\n"
-       cGRA "             Elapsed time : " cRST "%.3f secs\n\n",
-       in_file,
-       100 - ((double)in_len) * 100 / orig_len, in_len, in_len == 1 ? "" : "s",
-       ((double)(alpha_d_total)) * 100 / (in_len ? in_len : 1),
-       total_execs,
-       missed_paths, missed_crashes, missed_hangs ? cLRD : "", missed_hangs,
-       (GetTickCount64() - start_time) / 1000.0);
-
-  if (total_execs > 50 && missed_hangs * 10 > total_execs)
-    WARNF(cLRD "Frequent timeouts - results may be skewed." cRST);
+#ifdef USE_COLOR
+  SAYF(cRST "\n");
+#endif /* USE_COLOR */
 
 }
+
+
+
+/* Actually analyze! */
+
+static void analyze(char** argv) {
+
+  u32 i;
+  u32 boring_len = 0, prev_xff = 0, prev_x01 = 0, prev_s10 = 0, prev_a10 = 0;
+
+  u8* b_data = ck_alloc(in_len + 1);
+  u8  seq_byte = 0;
+
+  b_data[in_len] = 0xff; /* Intentional terminator. */
+
+  ACTF("Analyzing input file (this may take a while)...\n");
+
+#ifdef USE_COLOR
+  show_legend();
+#endif /* USE_COLOR */
+
+  for (i = 0; i < in_len; i++) {
+
+    u32 xor_ff, xor_01, sub_10, add_10;
+    u8  xff_orig, x01_orig, s10_orig, a10_orig;
+
+    /* Perform walking byte adjustments across the file. We perform four
+       operations designed to elicit some response from the underlying
+       code. */
+
+    in_data[i] ^= 0xff;
+    xor_ff = run_target(argv, in_data, in_len, 0);
+
+    in_data[i] ^= 0xfe;
+    xor_01 = run_target(argv, in_data, in_len, 0);
+
+    in_data[i] = (in_data[i] ^ 0x01) - 0x10;
+    sub_10 = run_target(argv, in_data, in_len, 0);
+
+    in_data[i] += 0x20;
+    add_10 = run_target(argv, in_data, in_len, 0);
+    in_data[i] -= 0x10;
+
+    /* Classify current behavior. */
+
+    xff_orig = (xor_ff == orig_cksum);
+    x01_orig = (xor_01 == orig_cksum);
+    s10_orig = (sub_10 == orig_cksum);
+    a10_orig = (add_10 == orig_cksum);
+
+    if (xff_orig && x01_orig && s10_orig && a10_orig) {
+
+      b_data[i] = RESP_NONE;
+      boring_len++;
+
+    } else if (xff_orig || x01_orig || s10_orig || a10_orig) {
+
+      b_data[i] = RESP_MINOR;
+      boring_len++;
+
+    } else if (xor_ff == xor_01 && xor_ff == sub_10 && xor_ff == add_10) {
+
+      b_data[i] = RESP_FIXED;
+
+    } else b_data[i] = RESP_VARIABLE;
+
+    /* When all checksums change, flip most significant bit of b_data. */
+
+    if (prev_xff != xor_ff && prev_x01 != xor_01 &&
+        prev_s10 != sub_10 && prev_a10 != add_10) seq_byte ^= 0x80;
+
+    b_data[i] |= seq_byte;
+
+    prev_xff = xor_ff;
+    prev_x01 = xor_01;
+    prev_s10 = sub_10;
+    prev_a10 = add_10;
+
+  } 
+
+  dump_hex(in_data, in_len, b_data);
+
+  SAYF("\n");
+
+  OKF("Analysis complete. Interesting bits: %0.02f%% of the input file.",
+      100.0 - ((double)boring_len * 100) / in_len);
+
+  if (exec_hangs)
+    WARNF(cLRD "Encountered %u timeouts - results may be skewed." cRST,
+          exec_hangs);
+
+  ck_free(b_data);
+
+}
+
+
+
+/* Handle Ctrl-C and the like. */
+
+/*static void handle_stop_sig(int sig) {
+
+  stop_soon = 1;
+
+  if (child_pid > 0) kill(child_pid, SIGKILL);
+
+}*/
 
 
 /* Do basic preparations - persistent fds, filenames, etc. */
 
 static void set_up_environment(void) {
 
-  if (sinkhole_stds) {
-    devnul_handle = CreateFile(
-      "nul",
-      GENERIC_READ | GENERIC_WRITE,
-      FILE_SHARE_READ | FILE_SHARE_WRITE,
-      NULL,
-      OPEN_EXISTING,
-      0,
-      NULL
-    );
+    if (sinkhole_stds) {
+        devnul_handle = CreateFile(
+            "nul",
+            GENERIC_READ | GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            NULL,
+            OPEN_EXISTING,
+            0,
+            NULL
+        );
 
-    if (devnul_handle == INVALID_HANDLE_VALUE) {
-      PFATAL("Unable to open the nul device.");
+        if (devnul_handle == INVALID_HANDLE_VALUE) {
+            PFATAL("Unable to open the nul device.");
+        }
     }
-  }
 
-  if (!prog_in) {
+    if (!prog_in) {
 
-    u8* use_dir = getenv("TMP");
-    prog_in = alloc_printf("%s\\.afl-tmin-temp-%u", use_dir, getpid());
+        u8* use_dir = getenv("TMP");
+        prog_in = alloc_printf("%s\\.afl-analyze-temp-%u", use_dir, GetCurrentProcessId());
 
-  }
-
-}
-
-
-/* Handle stop signal (Ctrl-C, etc). */
-
-static void handle_stop_sig(int sig) {
-
-  u8 dump_path[MAX_PATH];
-  DWORD num_read = 0;
-
-  stop_soon = 1;
-
-  destroy_target_process(-1);
-
-  if (dump_on_abort) {
-    // Dump to a file whatever was achieved so far - even if we're not done
-    strcpy_s(dump_path, MAX_PATH, out_file);
-    strcat_s(dump_path, MAX_PATH, ".dmp");
-
-    write_to_file(dump_path, in_data, in_len);
-
-    ACTF("Dumped partially-minimized file to: %hs", dump_path);
-  }
-  Sleep(200); // Allow time for other cleanup
-
-  exit(1);
+    }
 
 }
-
 
 /* Setup signal handlers, duh. */
 
 static void setup_signal_handlers(void) {
-  signal(SIGINT, handle_stop_sig);
-  //signal(SIGTERM, handle_stop_sig);
-  //signal(SIGBREAK, handle_stop_sig);
-  //signal(SIGABRT, handle_stop_sig);
+  //not implemented on Windows
 }
 
 
@@ -1160,7 +1086,7 @@ static void setup_signal_handlers(void) {
 static void detect_file_args(char** argv) {
 
   u32 i = 0;
-  u8* cwd = getcwd(NULL, 0);
+  u8* cwd = _getcwd(NULL, 0);
 
   if (!cwd) PFATAL("getcwd() failed");
 
@@ -1181,7 +1107,7 @@ static void detect_file_args(char** argv) {
       argv[i] = n_arg;
       *aa_loc = '@';
 
-      //if (out_file[0] != '\\') ck_free(aa_subst);
+      //if (prog_in[0] != '/') ck_free(aa_subst);
 
     }
 
@@ -1202,12 +1128,7 @@ static void usage(u8* argv0) {
 
        "Required parameters:\n\n"
 
-       "  -i file       - input test case to be shrunk by the tool\n"
-       "  -o file       - final output location for the minimized data\n\n"
-
-       "Instrumentation type:\n\n"
-       "  -D dir        - directory with DynamoRIO binaries (drrun, drconfig)\n"
-       "  -Y            - enable the static instrumentation mode\n\n"
+       "  -i file       - input test case to be analyzed by the tool\n"
 
        "Execution control settings:\n\n"
 
@@ -1215,13 +1136,9 @@ static void usage(u8* argv0) {
        "  -t msec       - timeout for each run (%u ms)\n"
        "  -m megs       - memory limit for child process (%u MB)\n"
 
-       "Minimization settings:\n\n"
+       "Analysis settings:\n\n"
 
-       "  -e            - solve for edge coverage only, ignore hit counts\n"
-       "  -x            - treat non-zero exit codes as crashes\n"
-       "  -N            - only normalize, skip length minimization. Implies -S\n"
-       "  -M            - only minimize length, skip normalization. Implies -S\n"
-       "  -S            - single pass only\n\n"
+       "  -e            - look for edge coverage only, ignore hit counts\n\n"
 
        "Other stuff:\n\n"
 
@@ -1243,19 +1160,13 @@ static void find_binary(u8* fname) {
 }
 
 
-/* Read mask bitmap from file. This is for the -B option. */
+/* Fix up argv for QEMU. */
 
-static void read_bitmap(u8* fname) {
-
-  s32 fd = _open(fname, O_RDONLY | O_BINARY);
-
-  if (fd < 0) PFATAL("Unable to open '%s'", fname);
-
-  ck_read(fd, mask_bitmap, MAP_SIZE, fname);
-
-  _close(fd);
-
+static char** get_qemu_argv(u8* own_loc, char** argv, int argc) {
+  //not implemented on Windows
+  return NULL;
 }
+
 
 static unsigned int optind;
 static char *optarg;
@@ -1289,7 +1200,6 @@ int getopt(int argc, char **argv, char *optstring) {
     return (int)(c[0]);
   }
 }
-
 
 static void extract_client_params(u32 argc, char** argv) {
   u32 len = 1, i;
@@ -1341,25 +1251,20 @@ static void extract_client_params(u32 argc, char** argv) {
 int main(int argc, char** argv) {
 
   s32 opt;
-  u8  mem_limit_given = 0, timeout_given = 0;
+  u8  mem_limit_given = 0, timeout_given = 0, qemu_mode = 0;
   char** use_argv;
-  errno_t status;
 
-  start_time = GetTickCount64();
   doc_path = "docs";
-  optind = 1;
-  dynamorio_dir = NULL;
-  client_params = NULL;
 
 #ifdef USE_COLOR
   enable_ansi_console();
 #endif
 
-  SAYF(cCYA "afl-tmin for Windows " cBRI VERSION cRST " by <0vercl0k@tuxfamily.org>\n");
+  SAYF(cCYA "afl-analyze for Windows " cBRI VERSION cRST " by <l4ys.tw@gmail.com>\n");
   SAYF("Based on WinAFL " cBRI VERSION cRST " by <ifratric@google.com>\n");
   SAYF("Based on AFL " cBRI VERSION cRST " by <lcamtuf@google.com>\n");
-
-  while ((opt = getopt(argc,argv,"+i:o:f:m:t:B:D:xeQYVNMS")) > 0)
+  
+  while ((opt = getopt(argc,argv,"+i:f:m:t:D:eQYV")) > 0)
 
     switch (opt) {
 
@@ -1375,18 +1280,6 @@ int main(int argc, char** argv) {
         in_file = optarg;
         break;
 
-      case 'o':
-
-        if (out_file) FATAL("Multiple -o options not supported");
-        out_file = optarg;
-        status = _access_s(out_file, 2); // Check writability
-        if (status != 0 && GetLastError() != ERROR_FILE_NOT_FOUND)
-        {
-            if (status == ENOENT && GetLastError() == ERROR_PATH_NOT_FOUND) FATAL("Output folder doesn't exist");
-            FATAL("Output path not writable. status=%d, GLE=%lu", status, GetLastError());
-        }
-        break;
-
       case 'f':
 
         if (prog_in) FATAL("Multiple -f options not supported");
@@ -1398,12 +1291,6 @@ int main(int argc, char** argv) {
 
         if (edges_only) FATAL("Multiple -e options not supported");
         edges_only = 1;
-        break;
-
-      case 'x':
-
-        if (exit_crash) FATAL("Multiple -x options not supported");
-        exit_crash = 1;
         break;
 
       case 'm': {
@@ -1436,9 +1323,6 @@ int main(int argc, char** argv) {
 
           if (mem_limit < 5) FATAL("Dangerously low value of -m");
 
-          if (sizeof(int) == 4 && mem_limit > 2000)
-            FATAL("Value of -m out of range on 32-bit systems");
-
         }
 
         break;
@@ -1455,33 +1339,14 @@ int main(int argc, char** argv) {
 
         break;
 
-      case 'B': /* load bitmap */
-
-        /* This is a secret undocumented option! It is speculated to be useful
-           if you have a baseline "boring" input file and another "interesting"
-           file you want to minimize.
-
-           You can dump a binary bitmap for the boring file using
-           afl-showmap -b, and then load it into afl-tmin via -B. The minimizer
-           will then minimize to preserve only the edges that are unique to
-           the interesting input file, but ignoring everything from the
-           original map.
-
-           The option may be extended and made more official if it proves
-           to be useful. */
-
-        if (mask_bitmap) FATAL("Multiple -B options not supported");
-        mask_bitmap = ck_alloc(MAP_SIZE);
-        read_bitmap(optarg);
-        break;
-
       case 'Q':
+
         FATAL("QEMU mode not supported on Windows");
         break;
-
+        
       case 'Y':
 
-        if (dynamorio_dir) FATAL("Dynamic-instrumentation via DRIO is uncompatible with static-instrumentation");
+        if (dynamorio_dir) FATAL("Dynamic-instrumentation (DRIO) is uncompatible with static-instrumentation");
         drioless = 1;
 
         break;
@@ -1491,48 +1356,27 @@ int main(int argc, char** argv) {
         /* Version number has been printed already, just quit. */
         exit(0);
 
-      case 'N':
-
-        if (no_minimize) FATAL("Multiple -N options not supported");
-        if (no_normalize) FATAL("-N and -M mutually exclusive");
-        no_minimize = 1;
-        break;
-
-      case 'M':
-
-        if (no_normalize) FATAL("Multiple -M options not supported");
-        if (no_minimize) FATAL("-N and -M mutually exclusive");
-        no_normalize = 1;
-        break;
-
-      case 'S':
-
-        if (single_pass) FATAL("Multiple -S options not supported");
-        single_pass = 1;
-        break;
-
-
       default:
 
         usage(argv[0]);
 
     }
 
-  if(!in_file || !out_file) usage(argv[0]);
+  if (!in_file) usage(argv[0]);
   if(!drioless) {
     if(optind == argc || !dynamorio_dir) usage(argv[0]);
   }
-  if (no_normalize || no_minimize) single_pass = 1;
 
   extract_client_params(argc, argv);
   optind++;
 
   if (getenv("AFL_NO_SINKHOLE")) sinkhole_stds = 0;
-  if (getenv("AFL_TMIN_EXACT")) exact_mode = 1;
-  if (getenv("AFL_TMIN_DONT_DUMP_ON_ABORT")) dump_on_abort = 0;
+  
+  use_hex_offsets = !!getenv("AFL_ANALYZE_HEX");
 
   setup_shm();
   setup_watchdog_timer();
+  setup_signal_handlers();
 
   set_up_environment();
 
@@ -1542,9 +1386,7 @@ int main(int argc, char** argv) {
   use_argv = argv + optind;
 
   SAYF("\n");
-
   read_initial_file();
-  setup_signal_handlers();
 
   ACTF("Performing dry run (mem limit = %llu MB, timeout = %u ms%s)...",
        mem_limit, exec_tmout, edges_only ? ", edges only" : "");
@@ -1554,28 +1396,9 @@ int main(int argc, char** argv) {
   if (child_timed_out)
     FATAL("Target binary times out (adjusting -t may help).");
 
-  if (!crash_mode) {
+  if (!anything_set()) FATAL("No instrumentation detected.");
 
-     OKF("Program terminates normally, minimizing in "
-         cCYA "instrumented" cRST " mode.");
-
-     if (!anything_set()) FATAL("No instrumentation detected.");
-
-  } else {
-
-     OKF("Program exits with a signal, minimizing in " cMGN "%scrash" cRST
-         " mode.", exact_mode ? "EXACT " : "");
-
-  }
-
-  minimize(use_argv);
-
-  ACTF("Writing output to '%s'...", out_file);
-
-  unlink(prog_in);
-  prog_in = NULL;
-
-  write_to_file(out_file, in_data, in_len);
+  analyze(use_argv);
 
   OKF("We're done here. Have a nice day!\n");
 
