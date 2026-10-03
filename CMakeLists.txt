@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 2.6)
+cmake_minimum_required(VERSION 3.10)
 
 if (${USE_COLOR})
     add_definitions(-DUSE_COLOR)
@@ -72,6 +72,10 @@ project(afl-showmap)
 add_executable(afl-showmap
   afl-showmap.c
   )
+
+if (${TINYINST})
+  target_link_libraries(afl-showmap winafl_tinyinst)
+endif()
 
 project(afl-tmin)
 

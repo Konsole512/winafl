@@ -52,6 +52,8 @@ static HANDLE child_handle,
               child_thread_handle;
 static char *dynamorio_dir;
 static char *client_params;
+static char *winafl_dll_path;
+static const char *winafl_dll_path_default = "winafl.dll";
 int fuzz_iterations_max = 1, fuzz_iterations_current;
 
 static CRITICAL_SECTION critical_section;
@@ -80,6 +82,7 @@ static u32 in_len,                    /* Input data length                 */
            missed_crashes,            /* Misses due to crashes             */
            missed_paths,              /* Misses due to exec path diffs     */
            exec_tmout = EXEC_TIMEOUT; /* Exec timeout (ms)                 */
+           del_len_limit = 1;         /* Minimum block deletion length     */
 
 static u64 mem_limit = MEM_LIMIT,     /* Memory limit (MB)                 */
            start_time;                /* Tick count at the beginning       */
@@ -89,7 +92,7 @@ static HANDLE pipe_handle;            /* Handle of the name pipe          */
 static u64    name_seed;              /* Random integer to have a unique shm/pipe name */
 static HANDLE devnul_handle;          /* Handle of the nul device         */
 static u8     sinkhole_stds = 1;      /* Sink-hole stdout/stderr messages?*/
-static char   *fuzzer_id = NULL;      /* The fuzzer ID or a randomized 
+static char   *fuzzer_id = NULL;      /* The fuzzer ID or a randomized
                                          seed allowing multiple instances */
 
 static u8  crash_mode,                /* Crash-centric mode?               */
@@ -486,9 +489,12 @@ static void create_target_process(char** argv) {
     ck_free(static_config);
   } else {
     pidfile = alloc_printf("childpid_%s.txt", fuzzer_id);
+    if (winafl_dll_path == NULL) {
+      winafl_dll_path = winafl_dll_path_default;
+    }
     cmd = alloc_printf(
-      "%s\\drrun.exe -pidfile %s -no_follow_children -c winafl.dll %s -fuzz_iterations 1 -fuzzer_id %s -- %s",
-      dynamorio_dir, pidfile, client_params, fuzzer_id, target_cmd
+      "%s\\drrun.exe -pidfile %s -no_follow_children -c %s %s -fuzz_iterations 1 -fuzzer_id %s -- %s",
+      dynamorio_dir, pidfile, winafl_dll_path, client_params, fuzzer_id, target_cmd
     );
   }
 
@@ -965,7 +971,7 @@ next_del_blksize:
 
   }
 
-  if (del_len > 1 && in_len >= 1) {
+  if (del_len > del_len_limit && in_len >= 1) {
 
     del_len /= 2;
     goto next_del_blksize;
@@ -1207,6 +1213,7 @@ static void usage(u8* argv0) {
 
        "Instrumentation type:\n\n"
        "  -D dir        - directory with DynamoRIO binaries (drrun, drconfig)\n"
+       "  -w winafl     - Path to winafl.dll\n"
        "  -Y            - enable the static instrumentation mode\n\n"
 
        "Execution control settings:\n\n"
@@ -1218,6 +1225,7 @@ static void usage(u8* argv0) {
        "Minimization settings:\n\n"
 
        "  -e            - solve for edge coverage only, ignore hit counts\n"
+       "  -l bytes      - set minimum block deletion length to speed up minimization\n"
        "  -x            - treat non-zero exit codes as crashes\n"
        "  -N            - only normalize, skip length minimization. Implies -S\n"
        "  -M            - only minimize length, skip normalization. Implies -S\n"
@@ -1341,7 +1349,7 @@ static void extract_client_params(u32 argc, char** argv) {
 int main(int argc, char** argv) {
 
   s32 opt;
-  u8  mem_limit_given = 0, timeout_given = 0;
+  u8  mem_limit_given = 0, timeout_given = 0, del_limit_given = 0;
   char** use_argv;
   errno_t status;
 
@@ -1350,6 +1358,7 @@ int main(int argc, char** argv) {
   optind = 1;
   dynamorio_dir = NULL;
   client_params = NULL;
+  winafl_dll_path = NULL;
 
 #ifdef USE_COLOR
   enable_ansi_console();
@@ -1359,7 +1368,7 @@ int main(int argc, char** argv) {
   SAYF("Based on WinAFL " cBRI VERSION cRST " by <ifratric@google.com>\n");
   SAYF("Based on AFL " cBRI VERSION cRST " by <lcamtuf@google.com>\n");
 
-  while ((opt = getopt(argc,argv,"+i:o:f:m:t:B:D:xeQYVNMS")) > 0)
+  while ((opt = getopt(argc,argv,"+i:o:w:f:m:t:B:D:l:xeQYVNMS")) > 0)
 
     switch (opt) {
 
@@ -1385,6 +1394,12 @@ int main(int argc, char** argv) {
             if (status == ENOENT && GetLastError() == ERROR_PATH_NOT_FOUND) FATAL("Output folder doesn't exist");
             FATAL("Output path not writable. status=%d, GLE=%lu", status, GetLastError());
         }
+        break;
+
+      case 'w': /* winafl.dll path */
+
+        if (winafl_dll_path) FATAL("Multiple -w options not supported");
+        winafl_dll_path = optarg;
         break;
 
       case 'f':
@@ -1455,6 +1470,20 @@ int main(int argc, char** argv) {
 
         break;
 
+      case 'l':
+        if (del_limit_given) FATAL("Multiple -l options not supported");
+        del_limit_given = 1;
+
+        if (no_minimize) FATAL("-M and -l incompatible");
+
+        if (!optarg) FATAL("Wrong usage of -l");
+        if (optarg[0] == '-') FATAL("Dangerously low value of -l");
+
+        del_len_limit = atoi(optarg);
+        if (del_len_limit < 1 || del_len_limit > TMIN_MAX_FILE) FATAL("Value of -l out of range between 1 and TMIN_MAX_FILE");
+
+        break;
+
       case 'B': /* load bitmap */
 
         /* This is a secret undocumented option! It is speculated to be useful
@@ -1502,6 +1531,7 @@ int main(int argc, char** argv) {
 
         if (no_normalize) FATAL("Multiple -M options not supported");
         if (no_minimize) FATAL("-N and -M mutually exclusive");
+        if (del_limit_given) FATAL("-M and -l incompatible");
         no_normalize = 1;
         break;
 
